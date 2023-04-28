@@ -1,0 +1,572 @@
+---
+title: |
+ <center> STAT406 Project: </center>
+ <center> Predicting New Covid-19 Cases in U.S. with Multiple Variables </center>
+author: |
+ | Justin Liang 56007123
+ | Felix Ma 22972558 
+ | Yifan Wang 45753621 
+ | Jiale Wang 45464484
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+
+## Why this project is interesting to us?
+
+Since the beginning of 2020, the Covid-19 virus has spread worldwide and quickly resulted in a pandemic. Until now, Covid-19 still threatens our lives and has dramatically changed the way in which we live, learn, and travel. Fortunately, through the concerted efforts of the world, we now have vaccines to fight the virus. It will be of great insight to study the effects of vaccinations and other relevant data over time and build a model to predict new cases in the United States. This project seems interesting as it may help us understand the effectiveness of the vaccines and predict the future cases.
+
+
+## Introduction
+
+After online research, our group found a complete COVID-19 dataset maintained and updated by _Our world in Data_. This dataset contains daily COVID-19 data for countries around the world and is updated everyday. The dataset has 65 columns that provide important data including country, date, total confirmed cases, new cases, number of ICU patients, number of patients in hospital, COVID-19 test positive rate, number of vaccinations, etc. These variables can be very helpful for us in selecting appropriate predictors and build a model for predictions. Therefore, our eventual goal is to select the variables that best explain the number of new cases in the future and rely on the data in the dataset and fit an appropriate model that can predict future new COVID-19 cases in a given day.
+
+To complete our task, we are going to explore the data first. Daily new confirmed COVID-19 cases is the response variable since it reflects the cases in a given day and fluctuates everyday at the same time which is great for us to see how the factors influences the appearance of new cases. We also restricted the location of our data. Since the virus has been spreading widely in the U.S. over the past year and the U.S. is a pioneer in COVID-19 vaccines, we decided to focus on the U.S. data. As mentioned in the journal named _"Phase I/II study of COVID-19 RNA vaccine BNT162b1 in adults"_ from _Nature_ published in 2020 August 12th, phases 7 and 14 days before cases are confirmed can be very significant. Therefore, we have decided to use the variables 7 and 14 days before a given day as predictors.
+
+After exploratory data analysis, we will separate our data into training and testing sets and investigate more about the data to find the model with the best prediction power. A discussion about the results and limitations will be shown at the end of the project. We hope to figure out an effective prediction model for future cases in the United States at the end.
+
+
+
+## Exploratory Data Analysis
+
+
+```{r setup, message = FALSE, echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, error = TRUE)
+library(MASS)
+library(class)
+library(corrplot)
+library(stringr)
+library(knitr)
+require(dplyr) 
+library(easyGgplot2)
+library(tidyverse)
+library(kableExtra)
+data <- read.csv("owid-covid-data.csv")
+data_USA <- filter(data,location == "United States")
+#remove "iso_code", "continet", "location"
+data_USA <- data_USA[, 4:ncol(data_USA)]
+```
+
+### Data Inspection
+
+First, we will inspect the distribution of null values in the data set of United States. Ideally, we would like to use contiguous blocks of data over time that do not contain any null values. We can see that there are many variables that are almost entirely null from the starting date to the end date, these variables will need to be removed. Many variables from index 31 to 41 are null roughly prior to 2021. These variables have names related to vaccinations such as "total_vaccinations" and "new_vaccinations". These predictors could be very useful for our model which means that we would probably need to exclude all data prior to 2021. 
+
+```{r null 1, echo=FALSE}
+# Don't change me!!!
+rotate <- function(mat) t(apply(mat, 2, rev))
+data_USA_numeric <- data_USA[, 2:ncol(data_USA)]
+mat = as.matrix(data_USA_numeric)
+null_mat = is.na(mat)
+probs = 1:10/10
+dates = quantile(data_USA$date, probs = probs, type = 1)
+dates = rev(dates)
+predictors = 1:ncol(mat)
+image(rotate(null_mat), axes=FALSE, col = hcl.colors(12, "inferno", rev = TRUE),
+       main = "Null Values (dark) for complete USA data")
+axis(1, at=seq(0,1,length.out=ncol(mat)), 
+      labels= predictors, las= 2 ,cex.axis = 0.6)
+axis(2, at=seq(0,1,length.out=10), labels= dates, las= 2, cex.axis = 0.6)
+variables = data.frame(1:31, names(data_USA_numeric)[1:31], 
+                       c(32:61, ""),c(names(data_USA_numeric)[32:61], ""))
+names(variables) = c("Index", "Name", "Index", "Name")
+kable(variables)
+```
+
+The dataset contains many repeated variables  that describe the same kind of measurement but with a different aggregation or smoothing procedure. First, we removed all per_hundred or per_million variables from consideration because we are only analyzing United States. Next, we made a choice between a variable and its smoothed version. We have decided to use smoothed versions of each variable where possible because data is probably updated at irregular intervals. We do not want to model the irregularity in which the data is updated, just the trend. Because we are only analyzing cases for United States, we do not need any of the predictors that only vary among different countries. This includes all the variables from 43 to 57. We also believe that cases related to deaths should not be used because they are not meaningful predictors for new cases. The various vaccination variables carry slightly different meaning, we are not sure which ones to exclude so we have included all reasonable variables. After removing variables with excess null values, repeated variables, constant value variables and variables related to deaths, we end up with the following. We can use all the data from the beginning of 2021 to a few days before November 11 for analysis. 
+
+```{r null2, echo=FALSE}
+data_selected <- data_USA %>%
+                 select(date, new_cases_smoothed,
+                        icu_patients, hosp_patients,
+                        reproduction_rate, new_tests_smoothed, 
+                        positive_rate, total_vaccinations,
+                        people_vaccinated, people_fully_vaccinated,
+                        new_vaccinations_smoothed)
+data_selected_numeric = data_selected[, 2:ncol(data_selected)]
+mat = as.matrix(data_selected_numeric)
+null_mat = is.na(data_selected_numeric)
+probs = 1:10/10
+dates = quantile(data_selected$date, probs = probs, type = 1)
+dates = rev(dates)
+predictors = names(data_selected_numeric)
+image(rotate(null_mat), axes=FALSE, col = hcl.colors(12, "inferno", rev = TRUE),
+       main = "Null Values (dark) for filtered USA data")
+axis(1, at=seq(0,1,length.out=length(predictors)), 
+      labels= predictors, las= 2 ,cex.axis = 0.3)
+axis(2, at=seq(0,1,length.out=10), labels= dates, las= 2, cex.axis = 0.6)
+
+
+
+
+```
+Because we would like to use variables 7 days prior and 14 days prior for prediction, all the predictors will need to be duplicated and aligned properly. Below is a list of all relevant variables after data preparation. A summary of their numerical properties are also listed. 
+
+```{r data processing, echo=FALSE}
+data_7 <- data_selected %>%
+          select(date, new_cases_smoothed) %>%
+          slice(-(1:7)) %>%
+          mutate(
+      icu_patients_7 = slice(data_selected, (1:649))$icu_patients,
+      hosp_patients_7 = slice(data_selected, (1:649))$hosp_patients,
+      reproduction_rate_7 = slice(data_selected, (1:649))$reproduction_rate,
+      new_tests_smoothed_7 = slice(data_selected, (1:649))$new_tests_smoothed,
+      positive_rate_7 = slice(data_selected, (1:649))$positive_rate,
+      total_vaccinations_7 = slice(data_selected, (1:649))$total_vaccinations,
+      people_vaccinated_7 = slice(data_selected, (1:649))$people_vaccinated,
+      people_fully_vaccinated_7 = 
+        slice(data_selected, (1:649))$people_fully_vaccinated,
+      new_vaccinations_smoothed_7 = 
+        slice(data_selected, (1:649))$new_vaccinations_smoothed)
+data_14 <- data_7 %>%
+           slice(-(1:7)) %>%
+           mutate(icu_patients_14 = slice(data_selected, (1:642))$icu_patients,
+      hosp_patients_14 = slice(data_selected, (1:642))$hosp_patients,
+      reproduction_rate_14 = slice(data_selected, (1:642))$reproduction_rate,
+      new_tests_smoothed_14 = slice(data_selected, (1:642))$new_tests_smoothed,
+      positive_rate_14 = slice(data_selected, (1:642))$positive_rate,
+      total_vaccinations_14 = slice(data_selected, (1:642))$total_vaccinations,
+      people_vaccinated_14 = slice(data_selected, (1:642))$people_vaccinated,
+      people_fully_vaccinated_14 = 
+        slice(data_selected, (1:642))$people_fully_vaccinated,
+      new_vaccinations_smoothed_14 = 
+        slice(data_selected, (1:642))$new_vaccinations_smoothed)
+data_new <- data_14 %>%
+            slice(-1) %>%
+            mutate(
+              new_people_vaccinated_7 = people_vaccinated_7 - 
+              slice(data_14, (1:641))$people_vaccinated_7,
+                   new_people_vaccinated_14 = people_vaccinated_14 - 
+              slice(data_14, (1:641))$people_vaccinated_14,
+              new_people_fully_vaccinated_7 = 
+    people_fully_vaccinated_7 - 
+      slice(data_14, (1:641))$people_fully_vaccinated_7,
+    new_people_fully_vaccinated_14 = people_fully_vaccinated_14 - 
+    slice(data_14, (1:641))$people_fully_vaccinated_14)
+  
+data_final <- na.omit(data_new)
+rownames(data_final) <- NULL
+
+```
+
+```{r final table, echo=FALSE, warning= FALSE, message = FALSE}
+ordered_names = c("date", "icu_patients_7","hosp_patients_7",
+                  "reproduction_rate_7","new_tests_smoothed_7",
+                  "positive_rate_7","total_vaccinations_7",
+                  "people_vaccinated_7","people_fully_vaccinated_7",
+                  "new_vaccinations_smoothed_7",
+                  "new_people_vaccinated_7","new_people_fully_vaccinated_7",
+                  "new_cases_smoothed","icu_patients_14","hosp_patients_14",
+                  "reproduction_rate_14","new_tests_smoothed_14",
+                  "positive_rate_14","total_vaccinations_14",
+                  "people_vaccinated_14","people_fully_vaccinated_14",
+                  "new_vaccinations_smoothed_14",
+                  "new_people_vaccinated_14", "new_people_fully_vaccinated_14")
+variables = data.frame(ordered_names[1:12],ordered_names[13:24])
+names(variables) = c(" Table of Variable Names", "")
+kable(variables)
+options(digits=3)
+numeric = data_final[, 2:ncol(data_final)]
+summ = summary(numeric)
+mini = substr(summ[1,], 9, 100)
+first = substr(summ[2,], 9, 100)
+medi =substr(summ[3,], 9, 100)
+meani =substr(summ[4,], 9, 100)
+third =substr(summ[5,], 9, 100)
+maxi =substr(summ[6,], 9, 100)
+
+numerical = data.frame(mini, first, medi, meani, third, maxi)
+names(numerical) = c("Min", "1st Quartile", 
+                     "Median", "Mean", "3rd Quartile", "Max")
+
+kable(numerical) %>% kable_styling(font_size = 10)
+
+```
+\newpage
+### Univariate Analysis
+
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+data_us = data_final
+d1 <- ggplot(data = data_us, aes(x=new_cases_smoothed)) +
+        geom_histogram() + labs(x='New confirmed cases of COVID-19') +
+  theme(text = element_text(size=10))
+d2 <- ggplot(data = data_us, aes(x=icu_patients_7)) +
+        geom_histogram() + labs(x='Number of patients in icu 7 days before') +
+  theme(text = element_text(size=10))
+d3 <- ggplot(data = data_us, aes(x=hosp_patients_7)) +
+        geom_histogram() + labs(x='Number of patients in hospital 7 days before') +
+  theme(text = element_text(size=10))
+d4 <- ggplot(data = data_us, aes(x=reproduction_rate_7)) +
+        geom_histogram() + labs(x='Reproduction rate of COVID-19 7 days before') +
+  theme(text = element_text(size=10))
+d5 <- ggplot(data = data_us, aes(x=new_tests_smoothed_7)) +
+        geom_histogram() + labs(x='New tests for COVID-19 7 days before') +
+  theme(text = element_text(size=10))
+d6 <- ggplot(data = data_us, aes(x=positive_rate_7)) +
+        geom_histogram() + labs(x='Share of tests that are positive 7 days before') + 
+  theme(text = element_text(size=10))
+d7 <- ggplot(data = data_us, aes(x=total_vaccinations_7)) +
+        geom_histogram() + labs(x='Total number vaccination doses 7 days before') + 
+  theme(text = element_text(size=10))
+d8 <- ggplot(data = data_us, aes(x=people_vaccinated_7)) +
+        geom_histogram() + labs(x='Total number of people received vaccine 7 days before') +
+  theme(text = element_text(size=10))
+d9 <- ggplot(data = data_us, aes(x=people_fully_vaccinated_7)) +
+        geom_histogram() + labs(x='Total number of people fully vaccinated 7 days before') + 
+  theme(text = element_text(size=10))
+d10 <- ggplot(data = data_us, aes(x=new_vaccinations_smoothed_7)) +
+        geom_histogram() + labs(x='New vaccination doses administered 7 days before') +
+  theme(text = element_text(size=10))
+d11 <- ggplot(data = data_us, aes(x=new_people_vaccinated_7)) +
+        geom_histogram() + labs(x='New people vaccined 7 days before') +
+  theme(text = element_text(size=10))
+d12 <- ggplot(data = data_us, aes(x= new_people_fully_vaccinated_7)) +
+        geom_histogram() + labs(x='New people fully vaccinated 7 days before') +
+
+#layout <- matrix(c(1,2,5,3,4,8,6,7,2,1,5,6),6,2,byrow=TRUE)
+ggplot2.multiplot(d1, d2, d3, d4, d5, d6,cols = 2)
+ggplot2.multiplot(d7, d8, d9, d10, d11, d12,cols = 2)
+
+```
+In general, all the univariate plots have rather irregular shapes, we probably cannot assume normality for any of the plots.
+From the univariate plots we can see that the new COVID-19 cases is quite skewed and not unimodal, there are multiple modes with significantly more count. The number of icu patients has a large mode at around 10000 but is rather uniform throughout. The number of patient in hospital is very irregular with multiple modes. The reproductive rate looks bimodal with a mode at 0.9 and another at 1.5, the data is skewed towards the right. The new tests for COVID-19 has three modes with a largest mode at around 1.2 million. The share of tests that are positive is very irregular. The total number of vaccination doses, total number of people vaccinated, total number of people fully vaccinated graphs all exhibit the same shape with the modes appearing at the tails. New vaccination doses, new people vaccinated and new people full vaccinated are somewhat normally distributed with very heavy right tails.
+
+
+```{r, warning = FALSE, echo = FALSE}
+d13 <- ggplot(data = data_us, aes(x=icu_patients_14)) +
+        geom_histogram() + labs(x='Number of patients in icu 14 days before') +
+  theme(text = element_text(size=10))
+d14 <- ggplot(data = data_us, aes(x=hosp_patients_14)) +
+        geom_histogram() + labs(x='Number of patients in hospital 14 days before') +
+  theme(text = element_text(size=10))
+d15 <- ggplot(data = data_us, aes(x=reproduction_rate_14)) +
+        geom_histogram() + labs(x='Reproduction rate of COVID-19 14 days before') + theme(text = element_text(size=10))
+d16 <- ggplot(data = data_us, aes(x=new_tests_smoothed_14)) +
+        geom_histogram() + labs(x='New tests for COVID-19 14 days before') + 
+  theme(text = element_text(size=10))
+d17 <- ggplot(data = data_us, aes(x=positive_rate_14)) +
+        geom_histogram() + labs(x='Share of tests that are positive 14 days before') + theme(text = element_text(size=10))
+d18 <- ggplot(data = data_us, aes(x=total_vaccinations_14)) +
+        geom_histogram() + labs(x='Total number vaccination doses 14 days before') + theme(text = element_text(size=10))
+d19 <- ggplot(data = data_us, aes(x=people_vaccinated_14)) +
+        geom_histogram() + labs(x='Total number of people received vaccine 14 days before') + theme(text = element_text(size=10))
+d20 <- ggplot(data = data_us, aes(x=people_fully_vaccinated_14)) +
+        geom_histogram() + labs(x='Total number of people fully vaccinated 14 days before') + 
+  theme(text = element_text(size=10))
+d21 <- ggplot(data = data_us, aes(x=new_vaccinations_smoothed_14)) +
+        geom_histogram() + labs(x='New vaccination doses administered 14 days before') +
+  theme(text = element_text(size=10))
+d22 <- ggplot(data = data_us, aes(x=new_people_vaccinated_14)) +
+        geom_histogram() + labs(x='New people vaccined 14 days before') +
+  theme(text = element_text(size=10))
+d23 <- ggplot(data = data_us, aes(x= new_people_fully_vaccinated_14)) +
+        geom_histogram() + labs(x='New people fully vaccinated 14 days before') + theme(text = element_text(size=10))
+
+ggplot2.multiplot(d13, d14, d15, d16, d17, d18,cols = 2)
+ggplot2.multiplot(d19, d20, d21, d22, d23,cols = 2)
+
+
+```
+
+\newpage
+
+### Bivariate Analysis
+
+A correlation Matrix of the variables most positively correlated with New Cases Smoothed and a correlation matrix of the variables most negatively correlated with New Cases Smoothed have been produced. From the most positively correlated variables, positive_rate, icu_patients and hosp_patients are the variables most correlated with new cases. For all the predictors, the 7 day prior predictor has a higher correlation than the 14 day prior predictor. This pattern however is not true for the most negatively correlated predictors. New people fully vaccinated 14 days prior is more negatively correlated than 7 days prior. There is perfect positive correlation between the variables people_vaccinated, total_vaccinations and people_fully_vaccinated. Therefore it will probably be a good idea to remove all except one of the variables due to high colinearity.
+
+```{r correlation, warning=TRUE, echo=FALSE, message = FALSE}
+# some code
+data = data_final[, 2:ncol(data_final)]
+correlations <- cor(data, use = "everything") 
+target = 'new_cases_smoothed'
+decreasing <- as.matrix(sort(correlations[,target], decreasing = TRUE))
+top_decreasing <- names(decreasing[1:10, ])
+increasing <- as.matrix(sort(correlations[,target], decreasing = FALSE))
+top_increasing = c(target, names(increasing[1:10,]))
+top_positive_correlations <- correlations[top_decreasing, top_decreasing]
+top_negative_correlations <- correlations[top_increasing, top_increasing]
+corrplot.mixed(top_positive_correlations, upper = 'shade',
+               tl.col="black", tl.pos = "lt", 
+               tl.cex = 0.4,cl.cex = .7, number.cex=.7)
+corrplot.mixed(top_negative_correlations, upper = 'shade', tl.col="black", tl.pos = "lt", 
+               tl.cex = 0.4,cl.cex = .7, number.cex=.7)
+```
+
+
+
+
+
+```{r warning=FALSE, echo=FALSE, message = FALSE}
+scaled_data = data.frame(data)
+normalized = function(x){
+  (x - min(x))/(max(x) - min(x))
+}
+for (i in 1:ncol(data)){
+   scaled_data[, i] <- normalized(data[, i])
+}
+
+seven_variables = c("new_cases_smoothed", 
+                              "icu_patients_7","hosp_patients_7",
+                  "reproduction_rate_7","new_tests_smoothed_7",
+                  "positive_rate_7","total_vaccinations_7",
+                  "people_vaccinated_7","people_fully_vaccinated_7",
+                  "new_vaccinations_smoothed_7",
+                  "new_people_vaccinated_7","new_people_fully_vaccinated_7")
+scaled_data_7 = scaled_data[seven_variables]
+fourteen_variables = c("new_cases_smoothed","icu_patients_14","hosp_patients_14",
+                  "reproduction_rate_14","new_tests_smoothed_14",
+                  "positive_rate_14","total_vaccinations_14",
+                  "people_vaccinated_14","people_fully_vaccinated_14",
+                  "new_vaccinations_smoothed_14",
+                  "new_people_vaccinated_14", "new_people_fully_vaccinated_14")
+scaled_data_14 = scaled_data[fourteen_variables]
+
+variables = seven_variables
+analyze_data = scaled_data_7
+
+
+
+
+
+
+```
+
+
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=9))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+As we can see from the plot, the number of new cases confirmed is positively correlated (highly correlated) with the patients in hospital and number of patients in ICU. Also, the number of new cases confirmed is negatively correlated with number of people vaccinated(fully vaccinated). As the number of people fully vaccinated increases, there is a slight increase int the number of new cases confirmed, but there is a negative correlation between number of new cases confirmed and the number of people fully vaccinated. The total number of vaccinations shows similar trend with people fully vaccinated and people vaccinated. Reproduction rate appears to not have a strong relationship with new cases smoothed. It is interesting to note that as new people vaccinated and fully vaccinated increases, new cases appears to be approaching a value.
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=9))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+In this plot, the number of icu patients is positively correlated with patients in hospital and the positive rate, also number of icu patients is negatively correlated with number of people get vaccined(fully vaccined). 
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+
+In the plot, the number of patients in hospital is positively correlated with positive rate, also, we can see that there is a slight increase in number of patients in hospital as more people get vaccined, however, the number of patients in hospital is still negatively correlated with number of people get vaccined(fully vaccined). 
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+It is obvious that the correlation between reproduction rate and people fully vaccinated have a similar trend with that between reproduction rate and people vaccinated since the first two graphs are similar. There are also similar patterns between reproduction rate and number of people vaccinated and number of total vaccinations.
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+
+New tests exhibits similar patterns with the variables: new people vaccinated, people vaccinated and total vaccinations. 
+
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+
+Positive rate exhibits similar patterns with people fully vaccinated, people vaccinated and total vaccinated. It is also interesting that positive rate appears to approach a certain limit as new people vaccinated and fully vaccinated increases.
+
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+In this plot, we found that the correlation between the factor total vaccinations and the factors people fully vaccinated and people vaccinated seem very close to 1.
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+In the plot, people vaccinated and people fully vaccinated are highly correlated. It is also interesting that the new vaccinated graphs first increases then decrease as people vaccinated increases.
+
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+All the plots exhibit similar shape, similar to the plots between people vaccinated and the new vaccinated above. 
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+The new COVID-19 vaccinations are positively correlated with increased number of people vaccinated and fully vaccinated.
+
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+i = i + 1
+data.gathered <- analyze_data %>%
+as_data_frame() %>%
+gather(key = "variable", value = "value",
+         -variables[i])
+ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+facet_wrap(~variable)+
+scale_colour_viridis_d()+ 
+    theme(text = element_text(size=10))
+analyze_data = analyze_data[,2:ncol(analyze_data)]
+
+```
+
+It can be seen that the number of new people vaccinated has a positive relationship with the number of new people fully vaccinated. With increasing number of people vaccinated, there will be more people who are fully vaccinated.
+
+\newpage
+Remarks of the plots below have been omitted because the patterns are similar to the plots above. 
+```{r  warning=FALSE, echo=FALSE, message = FALSE}
+variables = fourteen_variables
+analyze_data = scaled_data_14
+size = 9
+
+plot_all = function(analyze_data, variables, i){
+  data.gathered <- analyze_data %>%
+  as_data_frame() %>%
+  gather(key = "variable", value = "value",
+         -variables[i])
+  print(ggplot(data.gathered, aes_string(x = "value", y = variables[i])) +
+  geom_point(aes(color = "black"), show.legend = FALSE, size = 1) +
+  facet_wrap(~variable)+
+  scale_colour_viridis_d()+ 
+    theme(text = element_text(size=size)))
+  analyze_data = analyze_data[,2:ncol(analyze_data)]  
+}
+
+analyze_data = plot_all(analyze_data, variables, 1)
+analyze_data = plot_all(analyze_data, variables, 2)
+size = 10
+analyze_data = plot_all(analyze_data, variables, 3)
+analyze_data = plot_all(analyze_data, variables, 4)
+analyze_data = plot_all(analyze_data, variables, 5)
+analyze_data = plot_all(analyze_data, variables, 6)
+analyze_data = plot_all(analyze_data, variables, 7)
+analyze_data = plot_all(analyze_data, variables, 8)
+analyze_data = plot_all(analyze_data, variables, 9)
+analyze_data = plot_all(analyze_data, variables, 10)
+analyze_data = plot_all(analyze_data, variables, 11)
+# for (i in 1:(length(variables) - 1)){
+#   if (i > 2){
+#     size = 10
+#   }
+
+
+
+```
+
+### Closing Remarks
+Our exploratory data analysis suggests that multiple variables are highly correlated with each other and we may need to combine or remove some. Nonnormality also indicates that we may wish to transform our target and/or explanatory variables depending on the model we consider. 
